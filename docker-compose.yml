@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+
+  # ── FastAPI video generation server ──────────────────────────
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./outputs:/app/outputs   # persist generated videos
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Telegram bot ──────────────────────────────────────────────
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Bot talks to the api service via Docker internal DNS
+      INFINITETALK_API_BASE: "http://api:8000"
+    depends_on:
+      api:
+        condition: service_healthy
+    command: python bot.py
