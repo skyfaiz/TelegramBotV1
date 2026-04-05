@@ -93,7 +93,8 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def stars_for_job(audio_s: float, tier: str) -> int:
-    return max(1, math.ceil(audio_s / 60.0 * STARS_PER_MINUTE[tier]))
+    """Calculate stars cost with minimum of 10 stars."""
+    return max(10, math.ceil(audio_s / 60.0 * STARS_PER_MINUTE[tier]))
 
 def estimate_wait(audio_s: float, tier: str) -> int:
     return math.ceil(audio_s * GENERATION_SPEED[tier])
@@ -216,7 +217,15 @@ def _api_download(job_id: str) -> bytes | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    # Preserve free_mode flags when clearing user data
+    free_mode = ctx.user_data.get("free_mode_permanent", False)
+    demo_used = ctx.user_data.get("demo_used", False)
     ctx.user_data.clear()
+    if free_mode:
+        ctx.user_data["free_mode"] = True
+        ctx.user_data["free_mode_permanent"] = True
+    if demo_used:
+        ctx.user_data["demo_used"] = True
     await update.message.reply_text(
         "🎬 *InfiniteTalk Video Bot*\n\n"
         "Turn a photo + voice clip into a talking-head video.\n"
@@ -230,7 +239,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    free_status = "✅ *FREE MODE ACTIVE*" if ctx.user_data.get("free_mode") else ""
+    is_free = ctx.user_data.get("free_mode") or ctx.user_data.get("free_mode_permanent")
+    free_status = "✅ *FREE MODE ACTIVE*" if is_free else ""
     await update.message.reply_text(
         f"*InfiniteTalk Bot – Help*\n{free_status}\n\n"
         "1️⃣ Send a face *photo*\n"
@@ -718,7 +728,7 @@ def main():
             STATE_RESOLUTION: [
                 CallbackQueryHandler(
                     choose_resolution,
-                    pattern="^(portrait|landscape)_",
+                    pattern="^(portrait|landscape|square)_",
                 ),
             ],
             STATE_CONFIRM: [
