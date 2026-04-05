@@ -53,6 +53,7 @@ BOT_TOKEN             = os.environ["TELEGRAM_BOT_TOKEN"]
 INFINITETALK_API_BASE = os.environ.get("INFINITETALK_API_BASE", "http://localhost:8000")
 MAX_AUDIO_SECONDS     = {"sd": 30, "hd": 20}  # Max audio length per tier
 FREE_MODE_PASSWORD    = "HighKGP"
+ONE_TIME_CODE         = "DEMO5S"  # One-time 5s SD generation code
 
 # ── Pricing in Telegram Stars (XTR) ─────────────────────────────────────────
 # 1 Star ≈ ₹1.50  (Telegram: 100 Stars ≈ $1.99 ≈ ₹165 at ₹83/$)
@@ -254,19 +255,37 @@ async def cmd_free(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = ctx.args or []
     if len(args) != 1:
         await update.message.reply_text(
-            "Usage: `/free <password>`", parse_mode="Markdown"
+            "Usage: `/free <password>`\n\n"
+            "Or use: `/free DEMO5S` for one 5-second SD video",
+            parse_mode="Markdown"
         )
         return
     
     password = args[0]
     if password == FREE_MODE_PASSWORD:
         ctx.user_data["free_mode"] = True
+        ctx.user_data["free_mode_permanent"] = True
         await update.message.reply_text(
             "🎉 *FREE MODE ACTIVATED!*\n\n"
-            "You can now generate videos without payment.\n"
+            "You can now generate unlimited videos without payment.\n"
             "Use /start to begin.",
             parse_mode="Markdown",
         )
+    elif password == ONE_TIME_CODE:
+        if ctx.user_data.get("demo_used"):
+            await update.message.reply_text(
+                "❌ Demo code already used. Contact admin for more access.",
+                parse_mode="Markdown"
+            )
+        else:
+            ctx.user_data["demo_mode"] = True
+            ctx.user_data["demo_used"] = True
+            await update.message.reply_text(
+                "🎁 *DEMO MODE ACTIVATED!*\n\n"
+                "You can generate ONE video (max 5s, SD quality only).\n"
+                "Use /start to begin.",
+                parse_mode="Markdown",
+            )
     else:
         await update.message.reply_text(
             "❌ Incorrect password.", parse_mode="Markdown"
@@ -429,8 +448,39 @@ async def choose_resolution(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
     inr_approx = round(stars * INR_PER_STAR)
 
-    # Check if user has free mode activated
-    if ctx.user_data.get("free_mode"):
+    # Check if user has free mode or demo mode activated
+    is_free = ctx.user_data.get("free_mode") or ctx.user_data.get("free_mode_permanent")
+    is_demo = ctx.user_data.get("demo_mode")
+    
+    if is_demo:
+        # Demo mode: enforce 5s SD only
+        if tier != "sd":
+            await q.answer("❌ Demo mode: SD quality only!", show_alert=True)
+            return STATE_RESOLUTION
+        if dur > 5:
+            await q.answer("❌ Demo mode: max 5 seconds!", show_alert=True)
+            return STATE_RESOLUTION
+        
+        # Deactivate demo mode after use
+        ctx.user_data["demo_mode"] = False
+        
+        await q.edit_message_text(
+            "*Order Summary* 🎁 DEMO MODE\n\n"
+            f"🖼 Resolution : {res['label']}\n"
+            f"💎 Quality    : {TIER_LABEL[tier]}\n"
+            f"🎵 Audio      : {dur:.1f} s\n"
+            f"⏱ Est. wait  : {fmt_wait(wait_s)}\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Cost       : *FREE DEMO* (normally {stars} ⭐)\n\n"
+            "🚀 *Generation starting automatically...*",
+            parse_mode="Markdown",
+        )
+        ctx.application.create_task(
+            _generate_and_deliver(q.message.chat_id, dict(ctx.user_data), ctx)
+        )
+        return ConversationHandler.END
+    
+    if is_free:
         await q.edit_message_text(
             "*Order Summary* 🎁 FREE MODE\n\n"
             f"🖼 Resolution : {res['label']}\n"
