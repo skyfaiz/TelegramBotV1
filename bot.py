@@ -51,7 +51,7 @@ load_dotenv()
 # ── Settings (read from environment / .env) ──────────────────────────────────
 BOT_TOKEN             = os.environ["TELEGRAM_BOT_TOKEN"]
 INFINITETALK_API_BASE = os.environ.get("INFINITETALK_API_BASE", "http://localhost:8000")
-MAX_AUDIO_SECONDS     = 25
+MAX_AUDIO_SECONDS     = {"sd": 30, "hd": 20}  # Max audio length per tier
 FREE_MODE_PASSWORD    = "HighKGP"
 
 # ── Pricing in Telegram Stars (XTR) ─────────────────────────────────────────
@@ -59,22 +59,22 @@ FREE_MODE_PASSWORD    = "HighKGP"
 # ₹200/min ÷ ₹1.50/Star ≈ 133 Stars/min  → rounded to 130
 # ₹120/min → 80 Stars/min
 # ₹ 60/min → 40 Stars/min
-STARS_PER_MINUTE = {"1080": 130, "720": 80, "480": 40}
-TIER_LABEL        = {"1080": "Full HD (1080p)", "720": "HD (720p)", "480": "SD (480p)"}
+STARS_PER_MINUTE = {"hd": 80, "sd": 40}
+TIER_LABEL        = {"hd": "HD (720p)", "sd": "SD (480p)"}
 INR_PER_STAR      = 1.50   # display only; actual rate set by Telegram
 
 # ── Resolutions (Wan2.1-compatible – all multiples of 64) ───────────────────
 RESOLUTIONS = {
-    "portrait_480":   {"w": 480,  "h": 832,  "tier": "480",  "label": "📱 Portrait  480p  (480×832)"},
-    "portrait_720":   {"w": 720,  "h": 1280, "tier": "720",  "label": "📱 Portrait  720p  (720×1280)"},
-    "portrait_1080":  {"w": 1080, "h": 1920, "tier": "1080", "label": "📱 Portrait 1080p (1080×1920)"},
-    "landscape_480":  {"w": 832,  "h": 480,  "tier": "480",  "label": "🖥 Landscape  480p  (832×480)"},
-    "landscape_720":  {"w": 1280, "h": 720,  "tier": "720",  "label": "🖥 Landscape  720p  (1280×720)"},
-    "landscape_1080": {"w": 1920, "h": 1080, "tier": "1080", "label": "🖥 Landscape 1080p (1920×1080)"},
+    "portrait_sd":   {"w": 480,  "h": 832,  "tier": "sd",  "label": "📱 Portrait SD  (480×832)"},
+    "portrait_hd":   {"w": 720,  "h": 1280, "tier": "hd",  "label": "📱 Portrait HD  (720×1280)"},
+    "landscape_sd":  {"w": 832,  "h": 480,  "tier": "sd",  "label": "� Landscape SD  (832×480)"},
+    "landscape_hd":  {"w": 1280, "h": 720,  "tier": "hd",  "label": "🖥 Landscape HD  (1280×720)"},
+    "square_sd":     {"w": 480,  "h": 480,  "tier": "sd",  "label": "⬜ Square SD  (480×480)"},
+    "square_hd":     {"w": 768,  "h": 768,  "tier": "hd",  "label": "⬜ Square HD  (768×768)"},
 }
 
 # ── GPU time estimate: seconds of compute per second of video ────────────────
-GENERATION_SPEED = {"480": 6, "720": 10, "1080": 18}
+GENERATION_SPEED = {"sd": 6, "hd": 10}
 
 # ── Conversation states ──────────────────────────────────────────────────────
 STATE_IMAGE, STATE_AUDIO, STATE_PROMPT, \
@@ -103,17 +103,18 @@ def fmt_wait(secs: int) -> str:
     m, s = divmod(secs, 60)
     return f"~{m} min {s} sec" if s else f"~{m} min"
 
-def crop_audio(raw: bytes, fmt: str) -> tuple[bytes, float]:
+def crop_audio(raw: bytes, fmt: str, tier: str = "sd") -> tuple[bytes, float]:
     """
-    Decode audio, trim to MAX_AUDIO_SECONDS if needed,
+    Decode audio, trim to tier-specific max length if needed,
     re-encode as MP3, return (mp3_bytes, actual_duration_s).
     """
+    max_seconds = MAX_AUDIO_SECONDS.get(tier, 30)
     seg = AudioSegment.from_file(BytesIO(raw), format=fmt)
     dur = len(seg) / 1000.0
-    out = seg[: MAX_AUDIO_SECONDS * 1000] if dur > MAX_AUDIO_SECONDS else seg
+    out = seg[: max_seconds * 1000] if dur > max_seconds else seg
     buf = BytesIO()
     out.export(buf, format="mp3")
-    return buf.getvalue(), min(dur, MAX_AUDIO_SECONDS)
+    return buf.getvalue(), min(dur, max_seconds)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -124,6 +125,7 @@ def orientation_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("📱 Portrait",  callback_data="orient_portrait"),
         InlineKeyboardButton("🖥 Landscape", callback_data="orient_landscape"),
+        InlineKeyboardButton("⬜ Square",    callback_data="orient_square"),
     ]])
 
 def resolution_kb(orientation: str) -> InlineKeyboardMarkup:
@@ -231,15 +233,14 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"*InfiniteTalk Bot – Help*\n{free_status}\n\n"
         "1️⃣ Send a face *photo*\n"
-        "2️⃣ Send a *voice/audio* (≤ 25 s, auto-trimmed)\n"
+        "2️⃣ Send a *voice/audio* (HD: ≤20s, SD: ≤30s, auto-trimmed)\n"
         "3️⃣ Type a *prompt* (speaking style)\n"
         "4️⃣ Choose *orientation* and *resolution*\n"
         "5️⃣ Pay with ⭐ *Telegram Stars*\n"
         "6️⃣ Receive your *video*!\n\n"
         "*Star pricing (per generation):*\n"
-        "  SD 480p   →  40 ⭐ / min\n"
-        "  HD 720p   →  80 ⭐ / min\n"
-        "  Full HD   → 130 ⭐ / min\n\n"
+        "  SD (480p)  →  40 ⭐ / min\n"
+        "  HD (720p)  →  80 ⭐ / min\n\n"
         "1 ⭐ ≈ ₹1.50 (Telegram sets the actual rate)\n\n"
         "/start  – begin a new video\n"
         "/cancel – abort current session",
@@ -294,7 +295,7 @@ async def receive_image(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await msg.reply_text(
         "✅ Photo saved!\n\n"
         "🎵 *Step 2* — Send a *voice message or audio file*.\n"
-        "Maximum 25 seconds — longer clips are trimmed automatically.",
+        "_HD: max 20s, SD: max 30s — longer clips are trimmed automatically._",
         parse_mode="Markdown",
     )
     return STATE_AUDIO
@@ -320,23 +321,29 @@ async def receive_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     raw     = bytes(await tg_file.download_as_bytearray())
 
     try:
-        audio_bytes, duration = crop_audio(raw, fmt)
+        # Store raw audio and format, will crop based on tier selection later
+        seg = AudioSegment.from_file(BytesIO(raw), format=fmt)
+        duration = len(seg) / 1000.0
+        
+        # Save raw audio temporarily
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        seg.export(tmp, format="mp3")
+        tmp.close()
+        
+        ctx.user_data["audio_path_raw"] = tmp.name
+        ctx.user_data["audio_duration_raw"] = duration
+        ctx.user_data["audio_format"] = fmt
+        
     except Exception as exc:
-        logger.error("crop_audio failed: %s", exc)
+        logger.error("Audio processing failed: %s", exc)
         await msg.reply_text(
             "❌ Could not read that audio file.\n"
             "Please try MP3, OGG, WAV, or send a voice message."
         )
         return STATE_AUDIO
 
-    ctx.user_data["audio_duration"] = duration
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tmp.write(audio_bytes); tmp.close()
-    ctx.user_data["audio_path"] = tmp.name
-
-    trim_note = "\n_✂️ Trimmed to 25 s._" if duration >= MAX_AUDIO_SECONDS else ""
     await msg.reply_text(
-        f"✅ Audio ready — *{duration:.1f} s*{trim_note}\n\n"
+        f"✅ Audio ready — *{duration:.1f} s*\n\n"
         "📝 *Step 3* — Type a *prompt* describing the speaking style.\n"
         "_e.g. 'speak naturally with slight head movement and eye contact'_",
         parse_mode="Markdown",
@@ -386,7 +393,24 @@ async def choose_resolution(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     res_key = q.data
     res     = RESOLUTIONS[res_key]
     tier    = res["tier"]
-    dur     = ctx.user_data["audio_duration"]
+    
+    # Crop audio based on tier-specific max length
+    raw_audio_path = ctx.user_data["audio_path_raw"]
+    raw_duration = ctx.user_data["audio_duration_raw"]
+    max_seconds = MAX_AUDIO_SECONDS[tier]
+    
+    # Read and crop audio
+    with open(raw_audio_path, "rb") as f:
+        raw_audio = f.read()
+    
+    audio_bytes, dur = crop_audio(raw_audio, "mp3", tier)
+    
+    # Save cropped audio
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tmp.write(audio_bytes); tmp.close()
+    ctx.user_data["audio_path"] = tmp.name
+    ctx.user_data["audio_duration"] = dur
+    
     stars   = stars_for_job(dur, tier)
     wait_s  = estimate_wait(dur, tier)
 
@@ -569,7 +593,7 @@ async def _generate_and_deliver(
 
     finally:
         # Clean up temp files regardless of outcome
-        for key in ("image_path", "audio_path"):
+        for key in ("image_path", "audio_path", "audio_path_raw"):
             p = ud.get(key)
             if p and os.path.exists(p):
                 try:
@@ -581,7 +605,7 @@ async def _generate_and_deliver(
 # ── /cancel ───────────────────────────────────────────────────────────────────
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    for key in ("image_path", "audio_path"):
+    for key in ("image_path", "audio_path", "audio_path_raw"):
         p = ctx.user_data.get(key)
         if p and os.path.exists(p):
             try: os.unlink(p)

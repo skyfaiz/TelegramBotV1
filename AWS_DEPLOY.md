@@ -53,10 +53,15 @@ Deploy InfiniteTalk bot on AWS Free Tier using EC2 instance.
 5. **Security Group**:
    - Create new security group
    - Name: `infinitetalk-sg`
+   - Description: "Security group for InfiniteTalk bot"
+   - Click **Create security group**
+   - After creation, select it and click **Edit inbound rules**
    - Add rules:
-     - **SSH (22)** - Source: 0.0.0.0/0
-     - **HTTP (80)** - Source: 0.0.0.0/0 (optional, for testing)
-     - **Custom TCP (8000)** - Source: 0.0.0.0/0 (for API)
+     - **Type**: SSH, **Port**: 22, **Source**: 0.0.0.0/0
+     - **Type**: HTTP, **Port**: 80, **Source**: 0.0.0.0/0 (optional, for testing)
+     - **Type**: HTTPS, **Port**: 443, **Source**: 0.0.0.0/0 (optional, for SSL)
+     - **Type**: Custom TCP, **Port**: 8000, **Source**: 0.0.0.0/0 (for API)
+   - Click **Save rules**
 
 ### 2.3 Storage Configuration
 - **Root volume**: 20GB (free tier includes 30GB)
@@ -66,6 +71,26 @@ Deploy InfiniteTalk bot on AWS Free Tier using EC2 instance.
 1. Review configuration
 2. Click **Launch Instance**
 3. Wait for instance to initialize (2-3 minutes)
+
+---
+
+## Step 2: Configure Instance Security
+
+### 2.1 Add Inbound Rules to Security Group
+1. Go to **EC2 → Security Groups**
+2. Select `infinitetalk-sg`
+3. Click **Edit inbound rules**
+4. Add these rules if not already added:
+   - **Type**: SSH, **Port**: 22, **Source**: 0.0.0.0/0
+   - **Type**: HTTP, **Port**: 80, **Source**: 0.0.0.0/0 (optional)
+   - **Type**: HTTPS, **Port**: 443, **Source**: 0.0.0.0/0 (optional)
+   - **Type**: Custom TCP, **Port**: 8000, **Source**: 0.0.0.0/0
+5. Click **Save rules**
+
+### 2.2 Alternative: Add Rules to Existing Security Group
+If you used the default security group:
+1. Find the security group attached to your instance
+2. Follow the same steps above to add inbound rules
 
 ---
 
