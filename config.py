@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str
     S3_REGION: str = "eu-ro-1"
 
+    # Video cleanup settings
+    video_retention_seconds: int = 3600
+    cleanup_interval_seconds: int = 600
+
     class Config:
         env_file = ".env"
 
