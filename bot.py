@@ -52,6 +52,7 @@ load_dotenv()
 BOT_TOKEN             = os.environ["TELEGRAM_BOT_TOKEN"]
 INFINITETALK_API_BASE = os.environ.get("INFINITETALK_API_BASE", "http://localhost:8000")
 MAX_AUDIO_SECONDS     = 25
+FREE_MODE_PASSWORD    = "HighKGP"
 
 # ── Pricing in Telegram Stars (XTR) ─────────────────────────────────────────
 # 1 Star ≈ ₹1.50  (Telegram: 100 Stars ≈ $1.99 ≈ ₹165 at ₹83/$)
@@ -226,8 +227,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    free_status = "✅ *FREE MODE ACTIVE*" if ctx.user_data.get("free_mode") else ""
     await update.message.reply_text(
-        "*InfiniteTalk Bot – Help*\n\n"
+        f"*InfiniteTalk Bot – Help*\n{free_status}\n\n"
         "1️⃣ Send a face *photo*\n"
         "2️⃣ Send a *voice/audio* (≤ 25 s, auto-trimmed)\n"
         "3️⃣ Type a *prompt* (speaking style)\n"
@@ -243,6 +245,31 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/cancel – abort current session",
         parse_mode="Markdown",
     )
+
+
+# ── /free <password> — activate free mode ─────────────────────────────────────
+
+async def cmd_free(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    args = ctx.args or []
+    if len(args) != 1:
+        await update.message.reply_text(
+            "Usage: `/free <password>`", parse_mode="Markdown"
+        )
+        return
+    
+    password = args[0]
+    if password == FREE_MODE_PASSWORD:
+        ctx.user_data["free_mode"] = True
+        await update.message.reply_text(
+            "🎉 *FREE MODE ACTIVATED!*\n\n"
+            "You can now generate videos without payment.\n"
+            "Use /start to begin.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Incorrect password.", parse_mode="Markdown"
+        )
 
 
 # ── Step 1 : Image ───────────────────────────────────────────────────────────
@@ -377,6 +404,25 @@ async def choose_resolution(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     ctx.user_data["invoice_payload"] = payload
 
     inr_approx = round(stars * INR_PER_STAR)
+
+    # Check if user has free mode activated
+    if ctx.user_data.get("free_mode"):
+        await q.edit_message_text(
+            "*Order Summary* 🎁 FREE MODE\n\n"
+            f"🖼 Resolution : {res['label']}\n"
+            f"💎 Quality    : {TIER_LABEL[tier]}\n"
+            f"🎵 Audio      : {dur:.1f} s\n"
+            f"⏱ Est. wait  : {fmt_wait(wait_s)}\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Cost       : *FREE* (normally {stars} ⭐)\n\n"
+            "🚀 *Generation starting automatically...*",
+            parse_mode="Markdown",
+        )
+        # Skip payment, start generation directly
+        ctx.application.create_task(
+            _generate_and_deliver(q.message.chat_id, dict(ctx.user_data), ctx)
+        )
+        return ConversationHandler.END
 
     await q.edit_message_text(
         "*Order Summary*\n\n"
@@ -614,6 +660,7 @@ def main():
     app.add_handler(CommandHandler("help",   cmd_help))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("refund", cmd_refund))
+    app.add_handler(CommandHandler("free",   cmd_free))
 
     logger.info("InfiniteTalk Telegram Bot starting…")
     app.run_polling(drop_pending_updates=True)
