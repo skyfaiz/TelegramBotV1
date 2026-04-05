@@ -2,7 +2,8 @@
 FROM python:3.11-slim
 
 # ffmpeg needed by pydub (bot uses it; keep in same image if co-deploying)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# curl needed for Docker health checks
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
