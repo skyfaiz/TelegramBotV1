@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY config.py        ./config.py
 COPY main.py          ./main.py
+COPY bot.py           ./bot.py
 COPY clients/         ./clients/
 COPY routes/          ./routes/
 COPY .env             ./.env
