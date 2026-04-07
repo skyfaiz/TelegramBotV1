@@ -7,10 +7,15 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
+from io import BytesIO
 
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from pydub import AudioSegment
 import logging
+import boto3
+from botocore.exceptions import ClientError, NoCredentialsError
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +28,33 @@ from config import settings
 from clients import InfinitetalkS3Client
 
 router = APIRouter()
+
+# ── AWS Polly Configuration ─────────────────────────────────────────────────
+POLLY_VOICES = {
+    "standard": ["Joanna", "Matthew", "Ivy", "Kendra", "Kimberly", "Salli", "Joey", "Justin"],
+    "neural": ["Joanna", "Matthew", "Ivy", "Kendra", "Kimberly", "Salli", "Joey", "Justin", "Ruth", "Stephen"],
+    "generative": ["Ruth", "Matthew"],
+}
+
+# ── Pydantic models for TTS/Clone ───────────────────────────────────────────
+class TTSRequest(BaseModel):
+    text: str
+    engine: str = "neural"  # standard, neural, generative
+    voice_id: str = "Joanna"
+
+class TTSResponse(BaseModel):
+    audio_path: str
+    duration: float
+    characters: int
+
+class CloneRequest(BaseModel):
+    text: str
+
+class CloneResponse(BaseModel):
+    audio_path: str
+    duration: float
+    characters: int
+
 executor = ThreadPoolExecutor(max_workers=4)
 
 # In-memory job store (includes creation timestamp for cleanup)
@@ -268,3 +300,192 @@ async def download(job_id: str, custom_name: str = None):
         media_type="video/mp4",
         filename=filename
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Text-to-Speech (AWS Polly) Endpoint
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_polly_client():
+    """Create AWS Polly client using settings."""
+    if not settings.AWS_ACCESS_KEY_ID or not settings.AWS_SECRET_ACCESS_KEY:
+        return None
+    return boto3.client(
+        'polly',
+        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_REGION
+    )
+
+
+@router.post("/tts", response_model=TTSResponse)
+async def text_to_speech(request: TTSRequest):
+    """
+    Convert text to speech using AWS Polly.
+    
+    Engines:
+    - standard: Basic TTS, cheapest
+    - neural: Natural-sounding, mid-tier
+    - generative: Most expressive, premium (limited voices)
+    """
+    # Validate engine
+    engine = request.engine.lower()
+    if engine not in POLLY_VOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid engine. Choose from: {list(POLLY_VOICES.keys())}"
+        )
+    
+    # Validate voice for engine
+    if request.voice_id not in POLLY_VOICES[engine]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Voice '{request.voice_id}' not available for {engine} engine. "
+                   f"Available: {POLLY_VOICES[engine]}"
+        )
+    
+    # Validate text length (Polly limit: 3000 chars for standard, 6000 for neural/generative)
+    max_chars = 3000 if engine == "standard" else 6000
+    if len(request.text) > max_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text too long ({len(request.text)} chars). Max for {engine}: {max_chars}"
+        )
+    
+    polly = get_polly_client()
+    if not polly:
+        raise HTTPException(
+            status_code=503,
+            detail="AWS Polly not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY."
+        )
+    
+    try:
+        # Map engine to Polly engine parameter
+        engine_map = {
+            "standard": "standard",
+            "neural": "neural",
+            "generative": "generative"
+        }
+        
+        response = polly.synthesize_speech(
+            Text=request.text,
+            OutputFormat="mp3",
+            VoiceId=request.voice_id,
+            Engine=engine_map[engine]
+        )
+        
+        # Read audio stream
+        audio_stream = response['AudioStream'].read()
+        
+        # Save to temp file
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3", dir="outputs")
+        tmp.write(audio_stream)
+        tmp.close()
+        
+        # Calculate duration using pydub
+        audio_seg = AudioSegment.from_mp3(tmp.name)
+        duration = len(audio_seg) / 1000.0  # Convert ms to seconds
+        
+        logger.info(f"TTS generated: {len(request.text)} chars, {duration:.1f}s, voice={request.voice_id}")
+        
+        return TTSResponse(
+            audio_path=tmp.name,
+            duration=duration,
+            characters=len(request.text)
+        )
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        error_msg = e.response['Error']['Message']
+        logger.error(f"Polly error: {error_code} - {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Polly error: {error_msg}")
+    except NoCredentialsError:
+        raise HTTPException(status_code=503, detail="AWS credentials not configured")
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tts/voices")
+async def get_tts_voices():
+    """Return available voices for each engine."""
+    return POLLY_VOICES
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Voice Cloning Endpoint (Placeholder)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/clone", response_model=CloneResponse)
+async def clone_voice(
+    reference_audio: UploadFile = File(...),
+    text: str = Form(...)
+):
+    """
+    Clone a voice from reference audio and generate speech.
+    
+    NOTE: This is a placeholder endpoint. AWS Polly's "Personal Voice" feature
+    requires enterprise approval. This endpoint currently returns a mock response.
+    
+    Future implementation options:
+    - AWS Polly Personal Voice (enterprise)
+    - ElevenLabs Voice Cloning API
+    - Coqui TTS (open source)
+    """
+    # Validate text length
+    if len(text) > 1000:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text too long ({len(text)} chars). Max: 1000"
+        )
+    
+    # Validate reference audio size (max 10MB)
+    content = await reference_audio.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Reference audio too large (max 10MB)"
+        )
+    
+    # Save reference audio temporarily (for future implementation)
+    ref_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3", dir="outputs")
+    ref_tmp.write(content)
+    ref_tmp.close()
+    
+    try:
+        # ═══════════════════════════════════════════════════════════════════════
+        # PLACEHOLDER: Voice cloning not yet implemented
+        # For now, return an error explaining the feature is coming soon
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        # Clean up reference audio
+        os.unlink(ref_tmp.name)
+        
+        raise HTTPException(
+            status_code=501,
+            detail="Voice cloning coming soon! AWS Polly Personal Voice requires "
+                   "enterprise approval. Contact admin for updates."
+        )
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # Future implementation would look like:
+        # 
+        # 1. Upload reference audio to cloning service
+        # 2. Generate speech with cloned voice
+        # 3. Save and return audio file
+        #
+        # return CloneResponse(
+        #     audio_path=output_path,
+        #     duration=duration,
+        #     characters=len(text)
+        # )
+        # ═══════════════════════════════════════════════════════════════════════
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Clean up on error
+        if os.path.exists(ref_tmp.name):
+            os.unlink(ref_tmp.name)
+        logger.error(f"Clone error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
