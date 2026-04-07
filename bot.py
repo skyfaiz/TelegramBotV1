@@ -182,10 +182,12 @@ def tts_engine_kb() -> InlineKeyboardMarkup:
 def tts_voice_kb(engine: str) -> InlineKeyboardMarkup:
     """Keyboard for choosing TTS voice based on engine."""
     voices = TTS_VOICES.get(engine, TTS_VOICES["neural"])
-    rows = [
-        [InlineKeyboardButton(label, callback_data=f"tts_voice_{voice_id}")]
-        for voice_id, label in voices
-    ]
+    rows = []
+    for voice_id, label in voices:
+        rows.append([
+            InlineKeyboardButton(f"▶️ Preview", callback_data=f"tts_preview_{voice_id}"),
+            InlineKeyboardButton(label, callback_data=f"tts_voice_{voice_id}"),
+        ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -519,7 +521,44 @@ async def choose_tts_engine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     return STATE_TTS_VOICE
 
 
-# ── Step 2d : TTS - Choose Voice → Generate Audio ────────────────────────────
+# ── Step 2d : TTS - Preview Voice ─────────────────────────────────────────────
+
+async def preview_tts_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Send a short voice sample to preview the selected voice."""
+    q = update.callback_query
+    await q.answer("Generating preview...")
+    
+    voice_id = q.data.replace("tts_preview_", "")
+    engine = ctx.user_data.get("tts_engine", "neural")
+    
+    # Generate a short sample text
+    sample_text = "Hello! This is a preview of my voice. I hope you like how I sound."
+    
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, _api_tts, sample_text, engine, voice_id
+    )
+    
+    if result and result.get("audio_path"):
+        # Send the preview audio
+        with open(result["audio_path"], "rb") as audio_file:
+            await q.message.reply_voice(
+                voice=audio_file,
+                caption=f"🎧 Preview: *{voice_id}* ({engine.capitalize()})",
+                parse_mode="Markdown",
+            )
+        # Clean up preview file
+        try:
+            os.unlink(result["audio_path"])
+        except:
+            pass
+    else:
+        await q.message.reply_text("❌ Preview failed. Please try again.")
+    
+    return STATE_TTS_VOICE
+
+
+# ── Step 2e : TTS - Choose Voice → Generate Audio ────────────────────────────
 
 async def choose_tts_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
@@ -548,7 +587,7 @@ async def choose_tts_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     
     if not result:
         await q.message.reply_text(
-            "❌ *TTS generation failed.*\n\n"
+            "❌ *Audio generation failed.*\n\n"
             "Please try again or use Upload Audio instead.\n"
             "Use /start to begin again.",
             parse_mode="Markdown",
@@ -560,8 +599,19 @@ async def choose_tts_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     ctx.user_data["audio_duration_raw"] = result["duration"]
     ctx.user_data["audio_format"] = "mp3"
     
+    # Send the generated audio to user
+    with open(result["audio_path"], "rb") as audio_file:
+        await q.message.reply_voice(
+            voice=audio_file,
+            caption=(
+                f"🔊 *Your generated audio* — {result['duration']:.1f}s\n\n"
+                f"Voice: {voice_id} | Engine: {ctx.user_data['tts_engine'].capitalize()}"
+            ),
+            parse_mode="Markdown",
+        )
+    
     await q.message.reply_text(
-        f"✅ Audio generated — *{result['duration']:.1f} s*\n\n"
+        "✅ Audio ready!\n\n"
         "📝 *Step 3* — Type a *prompt* describing the speaking style.\n"
         "_e.g. 'speak naturally with slight head movement and eye contact'_",
         parse_mode="Markdown",
@@ -867,44 +917,44 @@ async def _generate_and_deliver(
         if not job_id:
             await bot.send_message(
                 chat_id,
-                "❌ *Job submission failed.*\n\n"
-                f"Your Stars have been charged. Please contact support.\n"
-                f"Charge ID: `{ud.get('charge_id', 'N/A')}`",
+                "❌ *Generation could not be started.*\n\n"
+                "Please contact support for a refund.\n"
+                f"Reference: `{ud.get('charge_id', 'N/A')}`",
                 parse_mode="Markdown",
             )
             return
 
         await bot.send_message(
             chat_id,
-            f"✅ Job submitted to RunPod.\n"
+            f"✅ *Generation started!*\n"
             f"⏳ Processing… _{fmt_wait(ud['wait_seconds'])} estimated._\n\n"
-            "_I'll notify you when it's done — no need to wait here._",
+            "_I'll send your video here when it's ready — no need to wait!_",
             parse_mode="Markdown",
         )
 
-        # ── 2. Poll status (FastAPI polls RunPod internally) ─────────────────
+        # ── 2. Poll status ────────────────────────────────────────────────────
         result = await loop.run_in_executor(None, _api_poll, job_id)
 
         if result.get("status") != "COMPLETED":
-            err = result.get("error", "Unknown error")
             await bot.send_message(
                 chat_id,
-                f"❌ *Generation failed:* _{err}_\n\n"
-                f"Job ID   : `{job_id}`\n"
-                f"Charge ID: `{ud.get('charge_id', 'N/A')}`\n\n"
-                "Share these with support to request a Stars refund.",
+                "❌ *Generation failed.*\n\n"
+                "Your payment is eligible for a refund.\n"
+                f"Reference: `{ud.get('charge_id', 'N/A')}`\n\n"
+                "Please contact support with this reference.",
                 parse_mode="Markdown",
             )
             return
 
-        # ── 3. Download video bytes from FastAPI ─────────────────────────────
+        # ── 3. Download video bytes ───────────────────────────────────────────
         video_bytes = await loop.run_in_executor(None, _api_download, job_id)
 
         if not video_bytes:
             await bot.send_message(
                 chat_id,
-                f"❌ Video generated but download failed.\n"
-                f"Job ID: `{job_id}` — contact support.",
+                "❌ *Video delivery failed.*\n\n"
+                "Your payment is eligible for a refund.\n"
+                f"Reference: `{ud.get('charge_id', 'N/A')}`",
                 parse_mode="Markdown",
             )
             return
@@ -914,11 +964,11 @@ async def _generate_and_deliver(
         await bot.send_video(
             chat_id,
             video    = BytesIO(video_bytes),
-            filename = f"infinitetalk_{job_id}.mp4",
+            filename = f"infinitetalk_video.mp4",
             caption  = (
                 f"🎬 *Your InfiniteTalk video!*\n\n"
                 f"📐 {RESOLUTIONS[ud['resolution_key']]['label']}\n"
-                f"Powered by Wan2.1 · /start to make another"
+                "/start to make another"
             ),
             parse_mode="Markdown",
         )
@@ -1001,6 +1051,7 @@ def main():
                 CallbackQueryHandler(choose_tts_engine, pattern="^tts_engine_"),
             ],
             STATE_TTS_VOICE: [
+                CallbackQueryHandler(preview_tts_voice, pattern="^tts_preview_"),
                 CallbackQueryHandler(choose_tts_voice, pattern="^tts_voice_"),
             ],
             STATE_CLONE_TEXT: [
