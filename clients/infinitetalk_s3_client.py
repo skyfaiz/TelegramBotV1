@@ -54,13 +54,17 @@ class InfinitetalkS3Client:
         self.s3_region = s3_region
         
         # Initialize S3 client
+        # Important: Explicitly pass credentials to avoid boto3 picking up AWS env vars
         self.s3_client = boto3.client(
             's3',
             endpoint_url=s3_endpoint_url,
             aws_access_key_id=s3_access_key_id,
             aws_secret_access_key=s3_secret_access_key,
             region_name=s3_region,
-            config=Config(signature_version='s3v4')
+            config=Config(
+                signature_version='s3v4',
+                s3={'addressing_style': 'path'}  # Use path-style addressing for RunPod
+            )
         )
         
         # Initialize HTTP session

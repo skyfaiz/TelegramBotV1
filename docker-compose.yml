@@ -23,6 +23,8 @@ services:
     environment:
       # Bot talks to the api service via Docker internal DNS
       INFINITETALK_API_BASE: "http://api:8000"
+    volumes:
+      - ./outputs:/app/outputs   # shared volume for TTS audio files
     depends_on:
       api:
         condition: service_healthy

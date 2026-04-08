@@ -35,3 +35,7 @@ Thumbs.db
 # Temp files
 *.tmp
 
+# Test output files
+test_output_*.mp3
+test_tts_local.py
+
